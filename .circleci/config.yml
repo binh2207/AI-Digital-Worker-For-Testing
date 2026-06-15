@@ -1,50 +1,5 @@
 version: 2.1
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Context: qa-bot-secrets
-#   CircleCI → Organization Settings → Contexts → qa-bot-secrets
-#
-#   ── Slack ────────────────────────────────────────────────────────────────
-#   SLACK_BOT_TOKEN         xoxb-…     Bot OAuth token (posting + mentions)
-#   SLACK_SIGNING_SECRET    …          App signing secret (webhook verification)
-#
-#   ── JIRA ─────────────────────────────────────────────────────────────────
-#   JIRA_URL                https://yourorg.atlassian.net
-#   JIRA_USER               user@yourorg.com
-#   JIRA_API_TOKEN          Atlassian API token
-#   JIRA_PROJECT_KEY        TEST
-#   JIRA_REVIEW_COLUMN      In Review
-#
-#   ── GitHub ───────────────────────────────────────────────────────────────
-#   GITHUB_TOKEN            ghp_…  PAT with repo + pull_requests scopes
-#   GITHUB_REPO             binh2207/AI-Digital-Worker-For-Testing
-#   GITHUB_DEFAULT_BRANCH   master
-#
-#   ── Claude Code (Anthropic) ──────────────────────────────────────────────
-#   ANTHROPIC_API_KEY       sk-ant-…  Required for Claude Code CLI in CI
-#
-#   ── Playwright ───────────────────────────────────────────────────────────
-#   PLAYWRIGHT_BASE_URL     https://sauce-demo.myshopify.com
-# ─────────────────────────────────────────────────────────────────────────────
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Pipeline parameters — passed by slack_webhook.py when it triggers this pipeline.
-# They carry the Slack context so run_pipeline.py can post back to the right thread.
-# ─────────────────────────────────────────────────────────────────────────────
-parameters:
-  slack_channel:
-    type: string
-    default: ""
-  slack_thread_ts:
-    type: string
-    default: ""
-  triggered_by:
-    type: string
-    default: "circleci"
-
-orbs:
-  node: circleci/node@5.2.0
-
 # ── Reusable commands ─────────────────────────────────────────────────────────
 commands:
   install_playwright_deps:
@@ -56,57 +11,10 @@ commands:
           name: Install Playwright browsers
           command: cd playwright-framework && npx playwright install chromium --with-deps
 
-  install_claude_code:
-    steps:
-      - run:
-          name: Install Claude Code CLI
-          command: npm install -g @anthropic-ai/claude-code
-      - run:
-          name: Verify Claude Code CLI is installed
-          command: claude --version 2>&1 || true
-
 # ── Jobs ──────────────────────────────────────────────────────────────────────
 jobs:
 
-  # ── Full Python QA pipeline — triggered by Slack via webhook ────────────────
-  run_qa_pipeline:
-    docker:
-      - image: cimg/python:3.12
-    environment:
-      CI: "true"
-      # Inject Slack context passed from slack_webhook.py so the pipeline
-      # can post progress updates and the final report back to the right thread.
-      SLACK_TRIGGER_CHANNEL:   << pipeline.parameters.slack_channel >>
-      SLACK_TRIGGER_THREAD_TS: << pipeline.parameters.slack_thread_ts >>
-      TRIGGERED_BY:            << pipeline.parameters.triggered_by >>
-    steps:
-      - checkout
-
-      - run:
-          name: Install system dependencies for Playwright
-          command: |
-            sudo apt-get update -qq
-            sudo apt-get install -y -qq \
-              libnss3 libatk1.0-0 libatk-bridge2.0-0 libcups2 \
-              libdrm2 libxkbcommon0 libxcomposite1 libxdamage1 \
-              libxfixes3 libxrandr2 libgbm1 libasound2
-
-      - run:
-          name: Install Python dependencies
-          command: pip install -r requirements.txt
-
-      - install_claude_code
-
-      - run:
-          name: Install Playwright MCP browser (for test_executor)
-          command: npx playwright install chromium --with-deps
-
-      - run:
-          name: Run QA pipeline
-          command: python run_pipeline.py
-          no_output_timeout: 30m
-
-  # ── Verify QA-Bot generated scripts (triggered on qa-bot/* branches) ────────
+  # Triggered when main.py (running locally) pushes generated scripts to qa-bot/*
   verify_generated_scripts:
     docker:
       - image: mcr.microsoft.com/playwright:v1.45.0-jammy
@@ -133,64 +41,10 @@ jobs:
       - store_test_results:
           path: playwright-framework/reports
 
-  # ── Standard E2E suite on main/feature branches ───────────────────────────
-  e2e_tests:
-    docker:
-      - image: mcr.microsoft.com/playwright:v1.45.0-jammy
-    environment:
-      CI: "true"
-      BASE_URL: https://sauce-demo.myshopify.com
-    steps:
-      - checkout
-      - install_playwright_deps
-      - run:
-          name: Run E2E tests
-          command: |
-            cd playwright-framework
-            npx playwright test tests/e2e --reporter=list,html,json
-      - store_artifacts:
-          path: playwright-framework/reports/html
-          destination: playwright-html-report
-      - store_artifacts:
-          path: playwright-framework/reports/results.json
-          destination: results.json
-      - store_artifacts:
-          path: playwright-framework/reports/artifacts
-          destination: test-artifacts
-      - store_test_results:
-          path: playwright-framework/reports
-
-  # ── API tests on main/feature branches ────────────────────────────────────
-  api_tests:
-    docker:
-      - image: mcr.microsoft.com/playwright:v1.45.0-jammy
-    environment:
-      CI: "true"
-      BASE_URL: https://sauce-demo.myshopify.com
-    steps:
-      - checkout
-      - install_playwright_deps
-      - run:
-          name: Run API tests
-          command: |
-            cd playwright-framework
-            npx playwright test tests/api --reporter=list,json
-      - store_artifacts:
-          path: playwright-framework/reports/results.json
-          destination: api-results.json
-
-# ── Workflows ──────────────────────────────────────────────────────────────────
+# ── Workflows ─────────────────────────────────────────────────────────────────
 workflows:
 
-  # Triggered by slack_webhook.py via CircleCI API — carries Slack context
-  qa_pipeline_ci:
-    when:
-      equal: [ "api", << pipeline.trigger_source >> ]
-    jobs:
-      - run_qa_pipeline:
-          context: qa-bot-secrets
-
-  # Triggered when test_automator pushes a new qa-bot/* branch
+  # Runs when bot pushes a new qa-bot/* branch after generating test scripts
   verify_qa_bot_scripts:
     jobs:
       - verify_generated_scripts:
@@ -198,25 +52,3 @@ workflows:
           filters:
             branches:
               only: /^qa-bot\/.*/
-
-  # Standard Playwright suite on main and feature branches
-  playwright_suite:
-    jobs:
-      - e2e_tests:
-          context: qa-bot-secrets
-          filters:
-            branches:
-              only:
-                - master
-                - main
-                - /feature\/.*/
-      - api_tests:
-          context: qa-bot-secrets
-          requires:
-            - e2e_tests
-          filters:
-            branches:
-              only:
-                - master
-                - main
-                - /feature\/.*/
