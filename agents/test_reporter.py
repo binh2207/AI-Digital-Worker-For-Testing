@@ -89,7 +89,7 @@ No markdown headers, no code blocks."""
             if pr_info:
                 pr_note = (
                     f"\n:github: <{pr_info['pr_url']}|PR #{pr_info['pr_number']}> created on branch `{pr_info['branch']}`"
-                    f" — CircleCI is verifying script quality."
+                    f" — automation scripts ready for review."
                 )
 
             icon = ":white_check_mark:" if status == "PASSED" else ":x:"

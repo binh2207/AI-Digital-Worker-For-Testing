@@ -1,12 +1,11 @@
 """
-One-shot pipeline runner for CI environments.
+One-shot pipeline runner.
 Invokes the full LangGraph workflow directly — no Slack Socket Mode loop.
 
-When triggered by slack_webhook.py via CircleCI API, the pipeline parameters
-are injected as environment variables:
+Environment variables (optional — set by the trigger source e.g. Jenkins):
   SLACK_TRIGGER_CHANNEL    — Slack channel to post progress + final report
   SLACK_TRIGGER_THREAD_TS  — Thread timestamp to reply into the right thread
-  TRIGGERED_BY             — Slack user ID who triggered the pipeline
+  TRIGGERED_BY             — Who triggered the pipeline (user ID or system name)
 
 Usage:
     python run_pipeline.py
@@ -19,10 +18,9 @@ from state import WorkflowState
 
 
 def main() -> None:
-    # Slack context injected by CircleCI from pipeline parameters
     slack_channel   = os.environ.get("SLACK_TRIGGER_CHANNEL", "")
     slack_thread_ts = os.environ.get("SLACK_TRIGGER_THREAD_TS") or None
-    triggered_by    = os.environ.get("TRIGGERED_BY", "circleci")
+    triggered_by    = os.environ.get("TRIGGERED_BY", "pipeline")
 
     initial_state: WorkflowState = {
         "slack_channel":   slack_channel,

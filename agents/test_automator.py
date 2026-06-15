@@ -2,7 +2,7 @@
 Node 3 — Test Automator Agent
 Reads the structured action log produced by test_executor, generates Playwright
 TypeScript scripts via Claude Code, then pushes them to a new GitHub branch and
-opens a PR. CircleCI picks up the branch and executes the scripts to verify quality.
+opens a PR for review.
 """
 import json
 import subprocess
@@ -236,7 +236,7 @@ Spec rules:
                 f"### Files\n"
                 + "\n".join(f"- `{p}`" for p in files)
                 + "\n\n"
-                f"CircleCI will run `npx playwright test` on this branch to verify script quality.\n\n"
+                f"Run `npx playwright test` on this branch to verify script quality.\n\n"
                 f"> Do **not** merge manually — this PR is managed by QA Bot."
             )
 
@@ -269,7 +269,7 @@ Spec rules:
                 if channel:
                     notify_progress(
                         channel,
-                        f":github: PR #{pr['number']} created for `{ticket_id}`: {pr['url']}\nCircleCI will run the scripts on branch `{branch_name}`.",
+                        f":github: PR #{pr['number']} created for `{ticket_id}`: {pr['url']}\nBranch: `{branch_name}`",
                         thread_ts,
                     )
 
