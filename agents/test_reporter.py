@@ -8,7 +8,6 @@ import subprocess
 from state import WorkflowState
 from tools.jira_client import add_comment, transition_ticket
 from tools.slack_client import post_message, lookup_user_id
-from pathlib import Path
 from config import PROJECT_DIR, CLAUDE_CMD
 
 
@@ -84,18 +83,20 @@ No markdown headers, no code blocks."""
             except Exception as exc:
                 print(f"[test_reporter] JIRA update failed for {ticket_id}: {exc}")
 
-            automation_scripts = state.get("automation_scripts", {})
-            scripts = automation_scripts.get(ticket_id, [])
-            script_note = ""
-            if scripts:
-                filenames = [Path(s).name for s in scripts]
-                script_note = f"\n:page_facing_up: Automation scripts: {', '.join(filenames)}"
+            github_prs = state.get("github_prs", {})
+            pr_info = github_prs.get(ticket_id)
+            pr_note = ""
+            if pr_info:
+                pr_note = (
+                    f"\n:github: <{pr_info['pr_url']}|PR #{pr_info['pr_number']}> created on branch `{pr_info['branch']}`"
+                    f" — CircleCI is verifying script quality."
+                )
 
             icon = ":white_check_mark:" if status == "PASSED" else ":x:"
             report_lines.append(
                 f"{icon} *{ticket_id}* — {ticket_map.get(ticket_id, {}).get('summary', '')}\n"
                 f"Status: *{status}* | Passed: {passed} | Failed: {failed}\n"
-                f"{summary_text}{script_note}\n"
+                f"{summary_text}{pr_note}\n"
             )
 
         full_report = "\n".join(report_lines)

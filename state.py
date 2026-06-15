@@ -18,6 +18,9 @@ class WorkflowState(TypedDict):
     automation_scripts: dict # ticket_id -> generated .spec.ts paths
     test_summary: dict       # ticket_id -> human-readable summary
 
+    # GitHub PRs created by the automator (keyed by ticket ID)
+    github_prs: dict  # ticket_id -> {branch, pr_url, pr_number}
+
     # Final report posted to Slack
     report: str
 

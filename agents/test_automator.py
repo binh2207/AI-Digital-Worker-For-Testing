@@ -1,17 +1,16 @@
 """
 Node 3 — Test Automator Agent
-Reads the structured action log (JSON) produced by test_executor and generates
-proper Playwright TypeScript automation scripts following POM conventions.
-Falls back to raw narrative text if no action log is available.
+Reads the structured action log produced by test_executor, generates Playwright
+TypeScript scripts via Claude Code, then pushes them to a new GitHub branch and
+opens a PR. CircleCI picks up the branch and executes the scripts to verify quality.
 """
 import json
 import subprocess
-from pathlib import Path
+from datetime import datetime
 from state import WorkflowState
 from tools.slack_client import notify_progress
-from config import PROJECT_DIR, CLAUDE_CMD
-
-FRAMEWORK_DIR = str(Path(PROJECT_DIR) / "playwright-framework")
+from tools.github_client import create_branch, commit_files, create_pull_request
+from config import PROJECT_DIR, CLAUDE_CMD, GITHUB_DEFAULT_BRANCH
 
 CODING_RULES = """
 ## Playwright Automation Coding Rules
@@ -49,7 +48,6 @@ CODING_RULES = """
 
 
 def _render_steps(steps: list[dict]) -> list[str]:
-    """Render a list of step dicts into human-readable lines."""
     lines = []
     for step in steps:
         seq = step.get("seq", "?")
@@ -74,7 +72,6 @@ def _render_steps(steps: list[dict]) -> list[str]:
 
 
 def _split_by_status(action_log: dict) -> tuple[list[dict], list[dict]]:
-    """Return (passed_tcs, failed_tcs) from the action log."""
     passed, failed = [], []
     for tc in action_log.get("test_cases", []):
         (passed if tc.get("status") == "PASSED" else failed).append(tc)
@@ -82,7 +79,6 @@ def _split_by_status(action_log: dict) -> tuple[list[dict], list[dict]]:
 
 
 def _render_passed_context(base_url: str, passed_tcs: list[dict]) -> str:
-    """Render only PASSED test cases with their verified steps/locators."""
     lines = [f"Base URL: {base_url}", ""]
     for tc in passed_tcs:
         lines.append(f"### {tc['id']}: {tc['title']}")
@@ -93,7 +89,6 @@ def _render_passed_context(base_url: str, passed_tcs: list[dict]) -> str:
 
 
 def _render_skip_list(failed_tcs: list[dict]) -> str:
-    """Render FAILED test cases as a skip list (no steps exposed)."""
     if not failed_tcs:
         return "None"
     return "\n".join(
@@ -102,10 +97,24 @@ def _render_skip_list(failed_tcs: list[dict]) -> str:
     )
 
 
+def _parse_files(claude_output: str) -> dict[str, str]:
+    """
+    Parse Claude's output into {relative_path: content}.
+    Handles '=== FILE: path ===' delimiters.
+    """
+    files: dict[str, str] = {}
+    sections = claude_output.split("=== FILE:")
+    for section in sections[1:]:
+        lines = section.strip().splitlines()
+        file_path = lines[0].strip().rstrip("===").strip()
+        content = "\n".join(lines[1:]).strip()
+        files[file_path] = content
+    return files
+
+
 def build_test_automator_node():
     def test_automator(state: WorkflowState) -> WorkflowState:
         jira_tickets: list[dict] = state.get("jira_tickets", [])
-        test_cases: dict = state.get("test_cases", {})
         test_results: dict = state.get("test_results", {})
         action_logs: dict = state.get("action_logs", {})
         channel = state.get("slack_channel")
@@ -115,12 +124,13 @@ def build_test_automator_node():
             return {**state, "error": "No test results to automate."}
 
         automation_scripts: dict = {}
+        github_prs: dict = {}
+        timestamp = datetime.utcnow().strftime("%Y%m%d-%H%M%S")
 
         for ticket in jira_tickets:
             ticket_id = ticket["id"]
             result = test_results.get(ticket_id, {})
             raw_execution = result.get("raw", "")
-            test_cases_md = test_cases.get(ticket_id, "")
             action_log = action_logs.get(ticket_id)
 
             if not raw_execution and not action_log:
@@ -129,12 +139,12 @@ def build_test_automator_node():
 
             spec_name = ticket_id.lower().replace("-", "_")
             page_name = "".join(w.capitalize() for w in ticket["summary"].split()) + "Page"
-            page_name = "".join(c for c in page_name if c.isalnum())  # strip punctuation
+            page_name = "".join(c for c in page_name if c.isalnum())
 
             if channel:
                 notify_progress(channel, f":robot_face: Generating automation scripts for `{ticket_id}`: _{ticket['summary']}_", thread_ts)
 
-            # --- Gate: only automate PASSED test cases ---
+            # Gate: only automate PASSED test cases
             if action_log:
                 passed_tcs, failed_tcs = _split_by_status(action_log)
                 if not passed_tcs:
@@ -144,14 +154,11 @@ def build_test_automator_node():
                     automation_scripts[ticket_id] = []
                     continue
 
-                automate_context = _render_passed_context(
-                    action_log.get("base_url", ""), passed_tcs
-                )
+                automate_context = _render_passed_context(action_log.get("base_url", ""), passed_tcs)
                 skip_list = _render_skip_list(failed_tcs)
                 source_label = f"Structured action log — {len(passed_tcs)} PASSED, {len(failed_tcs)} skipped"
                 print(f"[test_automator] {ticket_id}: {len(passed_tcs)} PASSED → automating, {len(failed_tcs)} FAILED → skipping.")
             else:
-                # Fallback: no structured log, send raw text and let Claude sort it out
                 automate_context = raw_execution[:6000]
                 skip_list = "(no action log — infer from narrative above)"
                 source_label = "Raw narrative output (action log unavailable)"
@@ -184,10 +191,10 @@ expressions listed here for all Page Object properties.
 
 Generate exactly TWO files — no text outside the delimiters.
 
-=== FILE: tests/e2e/{spec_name}.spec.ts ===
+=== FILE: playwright-framework/tests/e2e/{spec_name}.spec.ts ===
 <typescript code here>
 
-=== FILE: pages/{page_name}.ts ===
+=== FILE: playwright-framework/pages/{page_name}.ts ===
 <typescript code here>
 
 Spec rules:
@@ -198,7 +205,7 @@ Spec rules:
 - No hardcoded locators in the spec — everything in the Page Object.
 """
 
-            print(f"[test_automator] Generating automation script for {ticket_id} (source: {'action_log' if action_log else 'raw'}) ...")
+            print(f"[test_automator] Calling Claude to generate scripts for {ticket_id} ...")
             result_claude = subprocess.run(
                 [CLAUDE_CMD, "--print", "--output-format", "text"],
                 input=prompt,
@@ -211,21 +218,65 @@ Spec rules:
                 print(f"[test_automator] {ticket_id}: no output from Claude.")
                 continue
 
-            written_files = []
-            sections = output.split("=== FILE:")
-            for section in sections[1:]:
-                lines = section.strip().splitlines()
-                file_path_line = lines[0].strip().rstrip("===").strip()
-                code = "\n".join(lines[1:]).strip()
+            files = _parse_files(output)
+            if not files:
+                print(f"[test_automator] {ticket_id}: could not parse any files from Claude output.")
+                continue
 
-                target = Path(FRAMEWORK_DIR) / file_path_line
-                target.parent.mkdir(parents=True, exist_ok=True)
-                target.write_text(code, encoding="utf-8")
-                written_files.append(str(target))
-                print(f"[test_automator] Written: {target}")
+            # Push to GitHub
+            branch_name = f"qa-bot/{ticket_id.lower()}-{timestamp}"
+            pr_title = f"[QA Bot] {ticket_id} — {ticket['summary']}"
+            pr_body = (
+                f"## Auto-generated by Quality-Engineer-Bot\n\n"
+                f"**Ticket:** {ticket_id} — {ticket['summary']}\n"
+                f"**Source:** {source_label}\n\n"
+                f"### Files\n"
+                + "\n".join(f"- `{p}`" for p in files)
+                + "\n\n"
+                f"CircleCI will run `npx playwright test` on this branch to verify script quality.\n\n"
+                f"> Do **not** merge manually — this PR is managed by QA Bot."
+            )
 
-            automation_scripts[ticket_id] = written_files
+            try:
+                print(f"[test_automator] Creating branch {branch_name} ...")
+                create_branch(branch_name, from_branch=GITHUB_DEFAULT_BRANCH)
 
-        return {**state, "automation_scripts": automation_scripts}
+                print(f"[test_automator] Committing {len(files)} file(s) to {branch_name} ...")
+                commit_files(
+                    branch_name=branch_name,
+                    files=files,
+                    message=f"feat(qa-bot): add automation scripts for {ticket_id}",
+                )
+
+                print(f"[test_automator] Opening PR for {ticket_id} ...")
+                pr = create_pull_request(
+                    branch_name=branch_name,
+                    base_branch=GITHUB_DEFAULT_BRANCH,
+                    title=pr_title,
+                    body=pr_body,
+                )
+
+                github_prs[ticket_id] = {
+                    "branch": branch_name,
+                    "pr_url": pr["url"],
+                    "pr_number": pr["number"],
+                }
+
+                print(f"[test_automator] PR #{pr['number']} opened: {pr['url']}")
+                if channel:
+                    notify_progress(
+                        channel,
+                        f":github: PR #{pr['number']} created for `{ticket_id}`: {pr['url']}\nCircleCI will run the scripts on branch `{branch_name}`.",
+                        thread_ts,
+                    )
+
+            except Exception as exc:
+                print(f"[test_automator] GitHub push failed for {ticket_id}: {exc}")
+                if channel:
+                    notify_progress(channel, f":warning: GitHub push failed for `{ticket_id}`: {exc}", thread_ts)
+
+            automation_scripts[ticket_id] = list(files.keys())
+
+        return {**state, "automation_scripts": automation_scripts, "github_prs": github_prs}
 
     return test_automator

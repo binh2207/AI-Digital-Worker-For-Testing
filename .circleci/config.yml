@@ -1,9 +1,39 @@
 version: 2.1
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Context: qa-bot-secrets
+#   CircleCI → Organization Settings → Contexts → qa-bot-secrets
+#   Add every variable below before running any workflow.
+#
+#   ── Slack ────────────────────────────────────────────────────────────────
+#   SLACK_APP_TOKEN         xapp-1-…   Socket Mode token (local bot only)
+#   SLACK_BOT_TOKEN         xoxb-…     Bot OAuth token
+#   SLACK_CI_CHANNEL        #qa-bot-ci Optional: channel for CI run reports
+#                                       (leave empty to suppress Slack in CI)
+#
+#   ── JIRA ─────────────────────────────────────────────────────────────────
+#   JIRA_URL                https://yourorg.atlassian.net
+#   JIRA_USER               user@yourorg.com
+#   JIRA_API_TOKEN          Atlassian API token
+#   JIRA_PROJECT_KEY        TEST
+#   JIRA_REVIEW_COLUMN      In Review
+#
+#   ── GitHub ───────────────────────────────────────────────────────────────
+#   GITHUB_TOKEN            ghp_…  PAT with repo + pull_requests scopes
+#   GITHUB_REPO             owner/repo-name
+#   GITHUB_DEFAULT_BRANCH   main
+#
+#   ── Claude Code (Anthropic) ──────────────────────────────────────────────
+#   ANTHROPIC_API_KEY       sk-ant-…  Required for Claude Code CLI
+#
+#   ── Playwright ───────────────────────────────────────────────────────────
+#   PLAYWRIGHT_BASE_URL     https://sauce-demo.myshopify.com
+# ─────────────────────────────────────────────────────────────────────────────
+
 orbs:
   node: circleci/node@5.2.0
 
-# ── Reusable commands ──────────────────────────────────────────────────────────
+# ── Reusable commands ─────────────────────────────────────────────────────────
 commands:
   install_playwright_deps:
     steps:
@@ -14,21 +44,67 @@ commands:
           name: Install Playwright browsers
           command: cd playwright-framework && npx playwright install chromium --with-deps
 
-# ── Jobs ───────────────────────────────────────────────────────────────────────
+  install_claude_code:
+    steps:
+      - run:
+          name: Install Claude Code CLI
+          command: npm install -g @anthropic-ai/claude-code
+      - run:
+          name: Verify Claude Code auth
+          command: claude --version
+
+# ── Jobs ──────────────────────────────────────────────────────────────────────
 jobs:
-  # ── E2E tests (Chromium, headless) ──────────────────────────────────────────
-  e2e_tests:
+
+  # ── Full Python QA pipeline (Slack → JIRA → test design → live exec → PR) ──
+  run_qa_pipeline:
+    docker:
+      # cimg/python:3.12 ships with Node.js — needed for Claude Code CLI and npx playwright MCP
+      - image: cimg/python:3.12
+    environment:
+      CI: "true"
+    steps:
+      - checkout
+
+      - run:
+          name: Install system dependencies for Playwright
+          command: |
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq \
+              libnss3 libatk1.0-0 libatk-bridge2.0-0 libcups2 \
+              libdrm2 libxkbcommon0 libxcomposite1 libxdamage1 \
+              libxfixes3 libxrandr2 libgbm1 libasound2
+
+      - run:
+          name: Install Python dependencies
+          command: pip install -r requirements.txt
+
+      - install_claude_code
+
+      - run:
+          name: Install Playwright MCP browser (for test_executor)
+          command: npx playwright install chromium --with-deps
+
+      - run:
+          name: Run QA pipeline
+          command: python run_pipeline.py
+          no_output_timeout: 30m
+
+  # ── Verify QA-Bot generated scripts (triggered on qa-bot/* branches) ────────
+  verify_generated_scripts:
     docker:
       - image: mcr.microsoft.com/playwright:v1.45.0-jammy
     environment:
       CI: "true"
-      BASE_URL: https://sauce-demo.myshopify.com
     steps:
       - checkout
       - install_playwright_deps
       - run:
-          name: Run E2E tests
-          command: cd playwright-framework && npx playwright test tests/e2e --reporter=list,html,json
+          name: Run generated E2E scripts
+          command: |
+            cd playwright-framework
+            BASE_URL=$PLAYWRIGHT_BASE_URL npx playwright test tests/e2e \
+              --reporter=list,html,json
       - store_artifacts:
           path: playwright-framework/reports/html
           destination: playwright-html-report
@@ -41,7 +117,34 @@ jobs:
       - store_test_results:
           path: playwright-framework/reports
 
-  # ── API tests ────────────────────────────────────────────────────────────────
+  # ── Standard E2E suite on main/feature branches ───────────────────────────
+  e2e_tests:
+    docker:
+      - image: mcr.microsoft.com/playwright:v1.45.0-jammy
+    environment:
+      CI: "true"
+      BASE_URL: https://sauce-demo.myshopify.com
+    steps:
+      - checkout
+      - install_playwright_deps
+      - run:
+          name: Run E2E tests
+          command: |
+            cd playwright-framework
+            npx playwright test tests/e2e --reporter=list,html,json
+      - store_artifacts:
+          path: playwright-framework/reports/html
+          destination: playwright-html-report
+      - store_artifacts:
+          path: playwright-framework/reports/results.json
+          destination: results.json
+      - store_artifacts:
+          path: playwright-framework/reports/artifacts
+          destination: test-artifacts
+      - store_test_results:
+          path: playwright-framework/reports
+
+  # ── API tests on main/feature branches ────────────────────────────────────
   api_tests:
     docker:
       - image: mcr.microsoft.com/playwright:v1.45.0-jammy
@@ -53,26 +156,54 @@ jobs:
       - install_playwright_deps
       - run:
           name: Run API tests
-          command: cd playwright-framework && npx playwright test tests/api --reporter=list,json
+          command: |
+            cd playwright-framework
+            npx playwright test tests/api --reporter=list,json
       - store_artifacts:
           path: playwright-framework/reports/results.json
           destination: api-results.json
 
-# ── Workflows ─────────────────────────────────────────────────────────────────
+# ── Workflows ──────────────────────────────────────────────────────────────────
 workflows:
+
+  # Triggered on qa-bot/* branches pushed by the bot after generating scripts
+  verify_qa_bot_scripts:
+    jobs:
+      - verify_generated_scripts:
+          context: qa-bot-secrets
+          filters:
+            branches:
+              only: /^qa-bot\/.*/
+
+  # Manual / scheduled pipeline run without needing the local Slack bot
+  qa_pipeline_ci:
+    jobs:
+      - run_qa_pipeline:
+          context: qa-bot-secrets
+          filters:
+            branches:
+              only:
+                - main
+                - master
+
+  # Standard Playwright suite on main and feature branches
   playwright_suite:
     jobs:
       - e2e_tests:
+          context: qa-bot-secrets
           filters:
             branches:
               only:
                 - master
+                - main
                 - /feature\/.*/
       - api_tests:
+          context: qa-bot-secrets
           requires:
             - e2e_tests
           filters:
             branches:
               only:
                 - master
+                - main
                 - /feature\/.*/

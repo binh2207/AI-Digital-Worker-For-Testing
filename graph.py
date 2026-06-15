@@ -16,7 +16,7 @@ from tools.slack_client import notify_progress
 def _fetch_jira_tickets(state: WorkflowState) -> WorkflowState:
     try:
         tickets = get_review_tickets()
-        return {**state, "jira_tickets": tickets, "test_cases": {}, "test_results": {}, "action_logs": {}, "automation_scripts": {}, "test_summary": {}}
+        return {**state, "jira_tickets": tickets, "test_cases": {}, "test_results": {}, "action_logs": {}, "automation_scripts": {}, "github_prs": {}, "test_summary": {}}
     except Exception as exc:
         return {**state, "jira_tickets": [], "error": str(exc)}
 
