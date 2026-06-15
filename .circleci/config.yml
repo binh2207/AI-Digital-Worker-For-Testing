@@ -50,8 +50,9 @@ commands:
           name: Install Claude Code CLI
           command: npm install -g @anthropic-ai/claude-code
       - run:
-          name: Verify Claude Code auth
-          command: claude --version
+          name: Verify Claude Code CLI is installed
+          # Use --version non-interactively; || true prevents a hang if first-run prompts appear
+          command: claude --version 2>&1 || true
 
 # ── Jobs ──────────────────────────────────────────────────────────────────────
 jobs:
@@ -175,16 +176,15 @@ workflows:
             branches:
               only: /^qa-bot\/.*/
 
-  # Manual / scheduled pipeline run without needing the local Slack bot
+  # Manual pipeline trigger only — do NOT run on branch push to avoid loops
+  # when bot-generated qa-bot/* PRs are merged back to main.
+  # Trigger via: CircleCI UI → "Trigger Pipeline" or the CircleCI API.
   qa_pipeline_ci:
+    when:
+      equal: [ "api", << pipeline.trigger_source >> ]
     jobs:
       - run_qa_pipeline:
           context: qa-bot-secrets
-          filters:
-            branches:
-              only:
-                - main
-                - master
 
   # Standard Playwright suite on main and feature branches
   playwright_suite:

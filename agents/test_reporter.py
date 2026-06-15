@@ -101,11 +101,12 @@ No markdown headers, no code blocks."""
 
         full_report = "\n".join(report_lines)
 
-        # Post full report back into the original thread
-        try:
-            post_message(channel=slack_channel, text=full_report, thread_ts=slack_thread_ts)
-        except Exception as exc:
-            print(f"[test_reporter] Slack thread post failed: {exc}")
+        # Post full report back into the original thread (skip in CI mode where channel is empty)
+        if slack_channel:
+            try:
+                post_message(channel=slack_channel, text=full_report, thread_ts=slack_thread_ts)
+            except Exception as exc:
+                print(f"[test_reporter] Slack thread post failed: {exc}")
 
         # Build per-ticket mention lines for dev-channel
         mention_lines: list[str] = []

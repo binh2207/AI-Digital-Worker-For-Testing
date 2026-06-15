@@ -215,7 +215,10 @@ Spec rules:
 
             output = result_claude.stdout.strip()
             if not output:
-                print(f"[test_automator] {ticket_id}: no output from Claude.")
+                stderr_hint = result_claude.stderr.strip()[:300] if result_claude.stderr else ""
+                print(f"[test_automator] {ticket_id}: no output from Claude (exit={result_claude.returncode}). stderr: {stderr_hint}")
+                if channel:
+                    notify_progress(channel, f":warning: `{ticket_id}` — Claude returned no output (exit {result_claude.returncode}). Check ANTHROPIC_API_KEY.", thread_ts)
                 continue
 
             files = _parse_files(output)
@@ -274,6 +277,7 @@ Spec rules:
                 print(f"[test_automator] GitHub push failed for {ticket_id}: {exc}")
                 if channel:
                     notify_progress(channel, f":warning: GitHub push failed for `{ticket_id}`: {exc}", thread_ts)
+                continue  # do not record scripts that were never pushed
 
             automation_scripts[ticket_id] = list(files.keys())
 
