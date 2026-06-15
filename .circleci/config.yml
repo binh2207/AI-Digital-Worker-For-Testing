@@ -3,13 +3,10 @@ version: 2.1
 # ─────────────────────────────────────────────────────────────────────────────
 # Context: qa-bot-secrets
 #   CircleCI → Organization Settings → Contexts → qa-bot-secrets
-#   Add every variable below before running any workflow.
 #
 #   ── Slack ────────────────────────────────────────────────────────────────
-#   SLACK_APP_TOKEN         xapp-1-…   Socket Mode token (local bot only)
-#   SLACK_BOT_TOKEN         xoxb-…     Bot OAuth token
-#   SLACK_CI_CHANNEL        #qa-bot-ci Optional: channel for CI run reports
-#                                       (leave empty to suppress Slack in CI)
+#   SLACK_BOT_TOKEN         xoxb-…     Bot OAuth token (posting + mentions)
+#   SLACK_SIGNING_SECRET    …          App signing secret (webhook verification)
 #
 #   ── JIRA ─────────────────────────────────────────────────────────────────
 #   JIRA_URL                https://yourorg.atlassian.net
@@ -20,15 +17,30 @@ version: 2.1
 #
 #   ── GitHub ───────────────────────────────────────────────────────────────
 #   GITHUB_TOKEN            ghp_…  PAT with repo + pull_requests scopes
-#   GITHUB_REPO             owner/repo-name
-#   GITHUB_DEFAULT_BRANCH   main
+#   GITHUB_REPO             binh2207/AI-Digital-Worker-For-Testing
+#   GITHUB_DEFAULT_BRANCH   master
 #
 #   ── Claude Code (Anthropic) ──────────────────────────────────────────────
-#   ANTHROPIC_API_KEY       sk-ant-…  Required for Claude Code CLI
+#   ANTHROPIC_API_KEY       sk-ant-…  Required for Claude Code CLI in CI
 #
 #   ── Playwright ───────────────────────────────────────────────────────────
 #   PLAYWRIGHT_BASE_URL     https://sauce-demo.myshopify.com
 # ─────────────────────────────────────────────────────────────────────────────
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Pipeline parameters — passed by slack_webhook.py when it triggers this pipeline.
+# They carry the Slack context so run_pipeline.py can post back to the right thread.
+# ─────────────────────────────────────────────────────────────────────────────
+parameters:
+  slack_channel:
+    type: string
+    default: ""
+  slack_thread_ts:
+    type: string
+    default: ""
+  triggered_by:
+    type: string
+    default: "circleci"
 
 orbs:
   node: circleci/node@5.2.0
@@ -51,19 +63,22 @@ commands:
           command: npm install -g @anthropic-ai/claude-code
       - run:
           name: Verify Claude Code CLI is installed
-          # Use --version non-interactively; || true prevents a hang if first-run prompts appear
           command: claude --version 2>&1 || true
 
 # ── Jobs ──────────────────────────────────────────────────────────────────────
 jobs:
 
-  # ── Full Python QA pipeline (Slack → JIRA → test design → live exec → PR) ──
+  # ── Full Python QA pipeline — triggered by Slack via webhook ────────────────
   run_qa_pipeline:
     docker:
-      # cimg/python:3.12 ships with Node.js — needed for Claude Code CLI and npx playwright MCP
       - image: cimg/python:3.12
     environment:
       CI: "true"
+      # Inject Slack context passed from slack_webhook.py so the pipeline
+      # can post progress updates and the final report back to the right thread.
+      SLACK_TRIGGER_CHANNEL:   << pipeline.parameters.slack_channel >>
+      SLACK_TRIGGER_THREAD_TS: << pipeline.parameters.slack_thread_ts >>
+      TRIGGERED_BY:            << pipeline.parameters.triggered_by >>
     steps:
       - checkout
 
@@ -167,7 +182,15 @@ jobs:
 # ── Workflows ──────────────────────────────────────────────────────────────────
 workflows:
 
-  # Triggered on qa-bot/* branches pushed by the bot after generating scripts
+  # Triggered by slack_webhook.py via CircleCI API — carries Slack context
+  qa_pipeline_ci:
+    when:
+      equal: [ "api", << pipeline.trigger_source >> ]
+    jobs:
+      - run_qa_pipeline:
+          context: qa-bot-secrets
+
+  # Triggered when test_automator pushes a new qa-bot/* branch
   verify_qa_bot_scripts:
     jobs:
       - verify_generated_scripts:
@@ -175,16 +198,6 @@ workflows:
           filters:
             branches:
               only: /^qa-bot\/.*/
-
-  # Manual pipeline trigger only — do NOT run on branch push to avoid loops
-  # when bot-generated qa-bot/* PRs are merged back to main.
-  # Trigger via: CircleCI UI → "Trigger Pipeline" or the CircleCI API.
-  qa_pipeline_ci:
-    when:
-      equal: [ "api", << pipeline.trigger_source >> ]
-    jobs:
-      - run_qa_pipeline:
-          context: qa-bot-secrets
 
   # Standard Playwright suite on main and feature branches
   playwright_suite:

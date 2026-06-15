@@ -2,39 +2,47 @@
 One-shot pipeline runner for CI environments.
 Invokes the full LangGraph workflow directly — no Slack Socket Mode loop.
 
+When triggered by slack_webhook.py via CircleCI API, the pipeline parameters
+are injected as environment variables:
+  SLACK_TRIGGER_CHANNEL    — Slack channel to post progress + final report
+  SLACK_TRIGGER_THREAD_TS  — Thread timestamp to reply into the right thread
+  TRIGGERED_BY             — Slack user ID who triggered the pipeline
+
 Usage:
     python run_pipeline.py
-
-Env vars (all read from .env or CircleCI context):
-    SLACK_CI_CHANNEL  — optional Slack channel to post results to (e.g. #qa-bot-ci)
-                        Leave unset to suppress Slack output in CI.
 """
+import os
 import sys
-from state import WorkflowState
+
 from graph import workflow
+from state import WorkflowState
 
 
 def main() -> None:
-    import os
-
-    ci_channel = os.environ.get("SLACK_CI_CHANNEL", "")
+    # Slack context injected by CircleCI from pipeline parameters
+    slack_channel   = os.environ.get("SLACK_TRIGGER_CHANNEL", "")
+    slack_thread_ts = os.environ.get("SLACK_TRIGGER_THREAD_TS") or None
+    triggered_by    = os.environ.get("TRIGGERED_BY", "circleci")
 
     initial_state: WorkflowState = {
-        "slack_channel": ci_channel,
-        "slack_thread_ts": None,
-        "triggered_by": "circleci",
-        "jira_tickets": [],
-        "test_cases": {},
-        "test_results": {},
-        "action_logs": {},
+        "slack_channel":   slack_channel,
+        "slack_thread_ts": slack_thread_ts,
+        "triggered_by":    triggered_by,
+        "jira_tickets":    [],
+        "test_cases":      {},
+        "test_results":    {},
+        "action_logs":     {},
         "automation_scripts": {},
-        "github_prs": {},
-        "test_summary": {},
-        "report": "",
-        "error": None,
+        "github_prs":      {},
+        "test_summary":    {},
+        "report":          "",
+        "error":           None,
     }
 
-    print("[run_pipeline] Starting QA pipeline (CI mode) ...")
+    print(f"[run_pipeline] Starting QA pipeline — triggered by {triggered_by}")
+    if slack_channel:
+        print(f"[run_pipeline] Slack thread: {slack_channel} / {slack_thread_ts}")
+
     final_state = workflow.invoke(initial_state)
 
     if final_state.get("error"):

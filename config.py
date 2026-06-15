@@ -17,8 +17,9 @@ CLAUDE_CMD = (
     or r"C:\Users\OS\AppData\Roaming\npm\claude.cmd"
 )
 
-SLACK_APP_TOKEN = os.environ["SLACK_APP_TOKEN"]
+SLACK_APP_TOKEN = os.environ.get("SLACK_APP_TOKEN", "")   # only needed for local Socket Mode bot
 SLACK_BOT_TOKEN = os.environ["SLACK_BOT_TOKEN"]
+SLACK_SIGNING_SECRET = os.environ.get("SLACK_SIGNING_SECRET", "")
 
 JIRA_URL = os.environ["JIRA_URL"]
 JIRA_USER = os.environ["JIRA_USER"]
