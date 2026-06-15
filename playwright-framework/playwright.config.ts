@@ -20,7 +20,7 @@ export default defineConfig({
 
   use: {
     baseURL: process.env.BASE_URL || 'https://sauce-demo.myshopify.com',
-    headless: false,
+    headless: process.env.CI ? true : false,
     viewport: { width: 1280, height: 720 },
     screenshot: 'only-on-failure',
     video: 'retain-on-failure',

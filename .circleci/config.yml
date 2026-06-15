@@ -1,0 +1,78 @@
+version: 2.1
+
+orbs:
+  node: circleci/node@5.2.0
+
+# ── Reusable commands ──────────────────────────────────────────────────────────
+commands:
+  install_playwright_deps:
+    steps:
+      - run:
+          name: Install Node dependencies
+          command: cd playwright-framework && npm ci
+      - run:
+          name: Install Playwright browsers
+          command: cd playwright-framework && npx playwright install chromium --with-deps
+
+# ── Jobs ───────────────────────────────────────────────────────────────────────
+jobs:
+  # ── E2E tests (Chromium, headless) ──────────────────────────────────────────
+  e2e_tests:
+    docker:
+      - image: mcr.microsoft.com/playwright:v1.45.0-jammy
+    environment:
+      CI: "true"
+      BASE_URL: https://sauce-demo.myshopify.com
+    steps:
+      - checkout
+      - install_playwright_deps
+      - run:
+          name: Run E2E tests
+          command: cd playwright-framework && npx playwright test tests/e2e --reporter=list,html,json
+      - store_artifacts:
+          path: playwright-framework/reports/html
+          destination: playwright-html-report
+      - store_artifacts:
+          path: playwright-framework/reports/results.json
+          destination: results.json
+      - store_artifacts:
+          path: playwright-framework/reports/artifacts
+          destination: test-artifacts
+      - store_test_results:
+          path: playwright-framework/reports
+
+  # ── API tests ────────────────────────────────────────────────────────────────
+  api_tests:
+    docker:
+      - image: mcr.microsoft.com/playwright:v1.45.0-jammy
+    environment:
+      CI: "true"
+      BASE_URL: https://sauce-demo.myshopify.com
+    steps:
+      - checkout
+      - install_playwright_deps
+      - run:
+          name: Run API tests
+          command: cd playwright-framework && npx playwright test tests/api --reporter=list,json
+      - store_artifacts:
+          path: playwright-framework/reports/results.json
+          destination: api-results.json
+
+# ── Workflows ─────────────────────────────────────────────────────────────────
+workflows:
+  playwright_suite:
+    jobs:
+      - e2e_tests:
+          filters:
+            branches:
+              only:
+                - master
+                - /feature\/.*/
+      - api_tests:
+          requires:
+            - e2e_tests
+          filters:
+            branches:
+              only:
+                - master
+                - /feature\/.*/
