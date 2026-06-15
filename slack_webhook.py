@@ -75,14 +75,14 @@ def _trigger_circleci(channel: str, thread_ts: str, user: str) -> bool:
 
 @app.route("/slack/events", methods=["POST"])
 def slack_events():
-    if not _verify_slack_signature():
-        abort(403)
-
     payload = request.json or {}
 
-    # One-time URL verification during Slack app setup
+    # One-time URL verification during Slack app setup — must respond before sig check
     if payload.get("type") == "url_verification":
         return jsonify({"challenge": payload["challenge"]})
+
+    if not _verify_slack_signature():
+        abort(403)
 
     event = payload.get("event", {})
     if event.get("type") != "app_mention":
