@@ -9,8 +9,7 @@ import subprocess
 from datetime import datetime
 from state import WorkflowState
 from tools.slack_client import notify_progress
-from tools.github_client import create_branch, commit_files, create_pull_request
-from config import PROJECT_DIR, CLAUDE_CMD, GITHUB_DEFAULT_BRANCH
+from config import PROJECT_DIR, CLAUDE_CMD
 
 CODING_RULES = """
 ## Playwright Automation Coding Rules
@@ -53,21 +52,21 @@ def _render_steps(steps: list[dict]) -> list[str]:
         seq = step.get("seq", "?")
         action = step.get("action", "")
         if action == "navigate":
-            lines.append(f"  {seq}. navigate        → {step.get('url', '')}")
+            lines.append(f"  {seq}. navigate        -> {step.get('url', '')}")
         elif action == "click":
-            lines.append(f"  {seq}. click           → {step.get('locator', '')}")
+            lines.append(f"  {seq}. click           -> {step.get('locator', '')}")
         elif action == "fill":
-            lines.append(f"  {seq}. fill            → {step.get('locator', '')}  value={step.get('value', '')!r}")
+            lines.append(f"  {seq}. fill            -> {step.get('locator', '')}  value={step.get('value', '')!r}")
         elif action == "select_option":
-            lines.append(f"  {seq}. select_option   → {step.get('locator', '')}  value={step.get('value', '')!r}")
+            lines.append(f"  {seq}. select_option   -> {step.get('locator', '')}  value={step.get('value', '')!r}")
         elif action == "expect_visible":
-            lines.append(f"  {seq}. expect_visible  → {step.get('locator', '')}")
+            lines.append(f"  {seq}. expect_visible  -> {step.get('locator', '')}")
         elif action == "expect_text":
-            lines.append(f"  {seq}. expect_text     → {step.get('locator', '')}  expected={step.get('expected', '')!r}")
+            lines.append(f"  {seq}. expect_text     -> {step.get('locator', '')}  expected={step.get('expected', '')!r}")
         elif action == "expect_url":
-            lines.append(f"  {seq}. expect_url      → {step.get('pattern', '')}")
+            lines.append(f"  {seq}. expect_url      -> {step.get('pattern', '')}")
         else:
-            lines.append(f"  {seq}. {action} → {json.dumps(step)}")
+            lines.append(f"  {seq}. {action} -> {json.dumps(step)}")
     return lines
 
 
@@ -107,8 +106,16 @@ def _parse_files(claude_output: str) -> dict[str, str]:
     for section in sections[1:]:
         lines = section.strip().splitlines()
         file_path = lines[0].strip().rstrip("===").strip()
-        content = "\n".join(lines[1:]).strip()
-        files[file_path] = content
+        content_lines = lines[1:]
+        # Strip leading blank lines then opening ```[lang] fence
+        while content_lines and content_lines[0].strip() == "":
+            content_lines = content_lines[1:]
+        if content_lines and content_lines[0].strip().startswith("```"):
+            content_lines = content_lines[1:]
+        # Strip trailing non-code lines: closing ```, markdown separators (---), blank lines
+        while content_lines and content_lines[-1].strip() in ("```", "---", ""):
+            content_lines = content_lines[:-1]
+        files[file_path] = "\n".join(content_lines)
     return files
 
 
@@ -124,6 +131,7 @@ def build_test_automator_node():
             return {**state, "error": "No test results to automate."}
 
         automation_scripts: dict = {}
+        automation_file_contents: dict = {}
         github_prs: dict = {}
         timestamp = datetime.utcnow().strftime("%Y%m%d-%H%M%S")
 
@@ -157,9 +165,15 @@ def build_test_automator_node():
                 automate_context = _render_passed_context(action_log.get("base_url", ""), passed_tcs)
                 skip_list = _render_skip_list(failed_tcs)
                 source_label = f"Structured action log — {len(passed_tcs)} PASSED, {len(failed_tcs)} skipped"
-                print(f"[test_automator] {ticket_id}: {len(passed_tcs)} PASSED → automating, {len(failed_tcs)} FAILED → skipping.")
+                print(f"[test_automator] {ticket_id}: {len(passed_tcs)} PASSED -> automating, {len(failed_tcs)} FAILED -> skipping.")
             else:
-                automate_context = raw_execution[:6000]
+                automate_context = raw_execution[:6000].strip()
+                if not automate_context:
+                    print(f"[test_automator] {ticket_id}: no action log and no raw narrative — skipping automation.")
+                    if channel:
+                        notify_progress(channel, f":warning: `{ticket_id}` — no execution data available, automation skipped. Check Playwright MCP config.", thread_ts)
+                    automation_scripts[ticket_id] = []
+                    continue
                 skip_list = "(no action log — infer from narrative above)"
                 source_label = "Raw narrative output (action log unavailable)"
                 print(f"[test_automator] {ticket_id}: no action log, falling back to raw narrative.")
@@ -210,7 +224,7 @@ Spec rules:
                 [CLAUDE_CMD, "--print", "--output-format", "text"],
                 input=prompt,
                 capture_output=True, text=True, encoding="utf-8",
-                timeout=180, cwd=PROJECT_DIR,
+                timeout=300, cwd=PROJECT_DIR,
             )
 
             output = result_claude.stdout.strip()
@@ -226,61 +240,19 @@ Spec rules:
                 print(f"[test_automator] {ticket_id}: could not parse any files from Claude output.")
                 continue
 
-            # Push to GitHub
+            # Store scripts in state — GitHub push happens after self-healing
             branch_name = f"qa-bot/{ticket_id.lower()}-{timestamp}"
-            pr_title = f"[QA Bot] {ticket_id} — {ticket['summary']}"
-            pr_body = (
-                f"## Auto-generated by Quality-Engineer-Bot\n\n"
-                f"**Ticket:** {ticket_id} — {ticket['summary']}\n"
-                f"**Source:** {source_label}\n\n"
-                f"### Files\n"
-                + "\n".join(f"- `{p}`" for p in files)
-                + "\n\n"
-                f"Run `npx playwright test` on this branch to verify script quality.\n\n"
-                f"> Do **not** merge manually — this PR is managed by QA Bot."
-            )
-
-            try:
-                print(f"[test_automator] Creating branch {branch_name} ...")
-                create_branch(branch_name, from_branch=GITHUB_DEFAULT_BRANCH)
-
-                print(f"[test_automator] Committing {len(files)} file(s) to {branch_name} ...")
-                commit_files(
-                    branch_name=branch_name,
-                    files=files,
-                    message=f"feat(qa-bot): add automation scripts for {ticket_id}",
-                )
-
-                print(f"[test_automator] Opening PR for {ticket_id} ...")
-                pr = create_pull_request(
-                    branch_name=branch_name,
-                    base_branch=GITHUB_DEFAULT_BRANCH,
-                    title=pr_title,
-                    body=pr_body,
-                )
-
-                github_prs[ticket_id] = {
-                    "branch": branch_name,
-                    "pr_url": pr["url"],
-                    "pr_number": pr["number"],
-                }
-
-                print(f"[test_automator] PR #{pr['number']} opened: {pr['url']}")
-                if channel:
-                    notify_progress(
-                        channel,
-                        f":github: PR #{pr['number']} created for `{ticket_id}`: {pr['url']}\nBranch: `{branch_name}`",
-                        thread_ts,
-                    )
-
-            except Exception as exc:
-                print(f"[test_automator] GitHub push failed for {ticket_id}: {exc}")
-                if channel:
-                    notify_progress(channel, f":warning: GitHub push failed for `{ticket_id}`: {exc}", thread_ts)
-                continue  # do not record scripts that were never pushed
-
             automation_scripts[ticket_id] = list(files.keys())
+            automation_file_contents[ticket_id] = files
+            github_prs[ticket_id] = {
+                "branch": branch_name,
+                "summary": ticket["summary"],
+                "source_label": source_label,
+            }
+            print(f"[test_automator] {ticket_id}: {len(files)} file(s) staged for self-healing before GitHub push.")
+            if channel:
+                notify_progress(channel, f":hourglass: `{ticket_id}` — scripts generated, handing off to self-healer before pushing PR.", thread_ts)
 
-        return {**state, "automation_scripts": automation_scripts, "github_prs": github_prs}
+        return {**state, "automation_scripts": automation_scripts, "automation_file_contents": automation_file_contents, "github_prs": github_prs}
 
     return test_automator

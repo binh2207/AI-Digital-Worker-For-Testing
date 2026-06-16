@@ -2,13 +2,20 @@
 Slack trigger: listens for @Quality-Engineer-Bot mentions and kicks off the LangGraph workflow.
 """
 import re
+import sys
 import threading
+import logging
+
+sys.stdout.reconfigure(encoding="utf-8")
+sys.stderr.reconfigure(encoding="utf-8")
 from slack_bolt import App
 from slack_bolt.adapter.socket_mode import SocketModeHandler
 from config import SLACK_APP_TOKEN, SLACK_BOT_TOKEN
 from tools.slack_client import post_message
 from graph import workflow
 from state import WorkflowState
+
+logging.basicConfig(level=logging.DEBUG)
 
 app = App(token=SLACK_BOT_TOKEN)
 
@@ -25,6 +32,8 @@ def _run_workflow(channel: str, thread_ts: str, user: str) -> None:
         "test_results": {},
         "action_logs": {},
         "automation_scripts": {},
+        "automation_file_contents": {},
+        "healed_scripts": {},
         "github_prs": {},
         "test_summary": {},
         "report": "",
@@ -65,6 +74,8 @@ def handle_mention(event, say):
     channel = event["channel"]
     thread_ts = event.get("thread_ts") or event["ts"]
     user = event.get("user", "unknown")
+
+    print(f"[bot] app_mention received | user={user} channel={channel} text={text!r}")
 
     if not BOT_MENTION_PATTERN.search(text):
         say(

@@ -8,6 +8,7 @@ from state import WorkflowState
 from agents.test_designer import build_test_designer_node
 from agents.test_executor import build_test_executor_node
 from agents.test_automator import build_test_automator_node
+from agents.test_healer import build_test_healer_node
 from agents.test_reporter import build_test_reporter_node
 from tools.jira_client import get_review_tickets
 from tools.slack_client import notify_progress
@@ -51,6 +52,7 @@ def build_graph():
     graph.add_node("test_designer",  _with_progress(build_test_designer_node(),  ":pencil:",        "Test Designer — generating test cases"))
     graph.add_node("test_executor",  _with_progress(build_test_executor_node(),  ":globe_with_meridians:", "Test Executor — running live browser tests"))
     graph.add_node("test_automator", _with_progress(build_test_automator_node(), ":robot_face:",    "Test Automator — generating automation scripts"))
+    graph.add_node("test_healer",    _with_progress(build_test_healer_node(),    ":stethoscope:",   "Self-Healer — validating and fixing scripts"))
     graph.add_node("test_reporter",  _with_progress(build_test_reporter_node(),  ":bar_chart:",     "Test Reporter — compiling results"))
 
     graph.set_entry_point("fetch_tickets")
@@ -62,7 +64,8 @@ def build_graph():
     )
     graph.add_edge("test_designer",  "test_executor")
     graph.add_edge("test_executor",  "test_automator")
-    graph.add_edge("test_automator", "test_reporter")
+    graph.add_edge("test_automator", "test_healer")
+    graph.add_edge("test_healer",    "test_reporter")
     graph.add_edge("test_reporter",  END)
 
     return graph.compile()
