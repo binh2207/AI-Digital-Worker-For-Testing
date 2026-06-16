@@ -1,0 +1,54 @@
+version: 2.1
+
+# ── Reusable commands ─────────────────────────────────────────────────────────
+commands:
+  install_playwright_deps:
+    steps:
+      - run:
+          name: Install Node dependencies
+          command: cd playwright-framework && npm ci
+      - run:
+          name: Install Playwright browsers
+          command: cd playwright-framework && npx playwright install chromium --with-deps
+
+# ── Jobs ──────────────────────────────────────────────────────────────────────
+jobs:
+
+  # Triggered when main.py (running locally) pushes generated scripts to qa-bot/*
+  verify_generated_scripts:
+    docker:
+      - image: mcr.microsoft.com/playwright:v1.45.0-jammy
+    environment:
+      CI: "true"
+    steps:
+      - checkout
+      - install_playwright_deps
+      - run:
+          name: Run generated E2E scripts
+          command: |
+            cd playwright-framework
+            BASE_URL=$PLAYWRIGHT_BASE_URL npx playwright test tests/e2e \
+              --reporter=list,html,json
+      - store_artifacts:
+          path: playwright-framework/reports/html
+          destination: playwright-html-report
+      - store_artifacts:
+          path: playwright-framework/reports/results.json
+          destination: results.json
+      - store_artifacts:
+          path: playwright-framework/reports/artifacts
+          destination: test-artifacts
+      - store_test_results:
+          path: playwright-framework/reports
+
+# ── Workflows ─────────────────────────────────────────────────────────────────
+workflows:
+
+  # Runs when bot pushes a new qa-bot/* branch after generating test scripts
+  verify_qa_bot_scripts:
+    jobs:
+      - verify_generated_scripts:
+          context: qa-bot-secrets
+          filters:
+            branches:
+              only: /^qa-bot\/.*/
