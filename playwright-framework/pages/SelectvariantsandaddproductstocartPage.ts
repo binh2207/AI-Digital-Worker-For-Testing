@@ -1,48 +1,47 @@
-
-import { Page, Locator } from '@playwright/test';
+import { Page, Locator, expect } from '@playwright/test';
 import { BasePage } from './BasePage';
 
-const BASE_URL = 'https://sauce-demo.myshopify.com';
-
-export class SelectVariantsAndAddToCartPage extends BasePage {
-  readonly variantCombobox: Locator;
+export class SelectVariantsAndAddProductsToCartPage extends BasePage {
+  readonly variantSelect: Locator;
   readonly addToCartButton: Locator;
-  readonly cartBadge: Locator;
-  readonly cartLineItem: Locator;
-  readonly cartLineItemPrice: Locator;
-  readonly emptyCartMessage: Locator;
+  readonly cartLink: Locator;
+  readonly cartLinkInBanner: Locator;
+  readonly greyJacketLink: Locator;
+  readonly cartSubtotal: Locator;
   readonly continueShoppingLink: Locator;
+  readonly emptyCartMessage: Locator;
 
   constructor(page: Page) {
     super(page);
-    this.variantCombobox = page.getByRole('combobox');
-    this.addToCartButton = page.getByRole('button', { name: /add to cart/i });
-    this.cartBadge = page.getByRole('link', { name: /my cart/i });
-    this.cartLineItem = page.getByText(/grey jacket/i).first();
-    this.cartLineItemPrice = page.getByText(/£\d+\.\d{2}/);
-    this.emptyCartMessage = page.getByText('It appears that your cart is currently empty!');
-    this.continueShoppingLink = page.getByRole('link', { name: 'Continue Shopping' });
+    this.variantSelect = page.locator('select#product-select-option-0');
+    // fallbacks: ['.btn.add-to-cart', "input[type='submit'][value='Add to Cart']"]
+    this.addToCartButton = page.locator('input#add');
+    this.cartLink = page.getByRole('link', { name: /My Cart/ });
+    this.cartLinkInBanner = page.getByRole('banner').getByRole('link', { name: /My Cart/ });
+    this.greyJacketLink = page.getByRole('link', { name: /grey.?jacket/i });
+    this.cartSubtotal = page.locator('.cart-subtotal, .total');
+    this.continueShoppingLink = page.getByRole('link', { name: /Continue Shopping/ });
+    this.emptyCartMessage = page.getByText('It appears that your cart is currently empty!', { exact: true });
   }
 
-  async gotoProduct(): Promise<void> {
-    await this.page.goto(`${BASE_URL}/products/grey-jacket`);
+  async goto(): Promise<void> {
+    await this.page.goto('https://sauce-demo.myshopify.com/collections/frontpage/products/grey-jacket');
   }
 
   async gotoCart(): Promise<void> {
-    await this.page.goto(`${BASE_URL}/cart`);
-  }
-
-  async addToCart(): Promise<void> {
+    await this.page.goto('https://sauce-demo.myshopify.com/collections/frontpage/products/grey-jacket');
+    await expect(this.addToCartButton).toBeAttached({ timeout: 10000 });
     await this.addToCartButton.click();
+    await this.page.waitForLoadState('networkidle');
+    await this.page.goto('https://sauce-demo.myshopify.com/cart');
+    await this.page.waitForLoadState('domcontentloaded');
   }
 
-  async clickContinueShopping(): Promise<void> {
-    await this.continueShoppingLink.click();
+  async gotoEmptyCart(): Promise<void> {
+    await this.page.goto('https://sauce-demo.myshopify.com/cart/change?line=1&quantity=0');
   }
 
-  async getCartCount(): Promise<number> {
-    const text = await this.cartBadge.textContent();
-    const match = text?.match(/\d+/);
-    return match ? parseInt(match[0], 10) : 0;
+  async clickAddToCart(): Promise<void> {
+    await this.addToCartButton.click();
   }
 }

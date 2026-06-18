@@ -86,7 +86,7 @@ No markdown headers, no code blocks."""
             github_prs = state.get("github_prs", {})
             pr_info = github_prs.get(ticket_id)
             pr_note = ""
-            if pr_info:
+            if pr_info and pr_info.get("pr_url"):
                 pr_note = (
                     f"\n:github: <{pr_info['pr_url']}|PR #{pr_info['pr_number']}> created on branch `{pr_info['branch']}`"
                     f" — automation scripts ready for review."
