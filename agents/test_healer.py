@@ -593,7 +593,7 @@ def build_test_healer_node():
 
                 print(f"[test_healer] {ticket_id}: Claude patched {len(fixed)} file(s) — writing locally ...")
                 _write_files_locally(fixed)
-                current_files = fixed
+                current_files = {**current_files, **fixed}  # merge: keep files Claude didn't touch
                 if channel:
                     notify_progress(channel,
                         f":memo: `{ticket_id}` | scripts patched by Claude — running again...",
