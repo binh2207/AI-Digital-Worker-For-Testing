@@ -10,9 +10,10 @@ from pathlib import Path
 from state import WorkflowState
 from tools.slack_client import notify_progress
 from tools.github_client import create_branch, commit_files, create_pull_request
-from config import PROJECT_DIR, CLAUDE_CMD, GITHUB_DEFAULT_BRANCH
+from tools.claude_client import call_claude
+from config import PROJECT_DIR, GITHUB_DEFAULT_BRANCH
 
-MAX_ATTEMPTS = 5
+MAX_ATTEMPTS = 4
 PLAYWRIGHT_DIR = str(Path(PROJECT_DIR) / "playwright-framework")
 
 COMPILE_ERROR_HINTS = ("SyntaxError", "error TS", "Cannot find", "Module not found", "Object.<anonymous>")
@@ -438,13 +439,7 @@ def _fix_with_claude(
 ## Output Format (reproduce ALL files sent above — no other text outside these delimiters)
 {output_instructions}
 """
-    result = subprocess.run(
-        [CLAUDE_CMD, "--print", "--output-format", "text"],
-        input=prompt,
-        capture_output=True, text=True, encoding="utf-8",
-        timeout=300, cwd=PROJECT_DIR,
-    )
-    output = result.stdout.strip()
+    output = call_claude(prompt, max_tokens=8096)
     if not output:
         return None
     fixed = _parse_files(output)
@@ -606,12 +601,20 @@ def build_test_healer_node():
             source_label = pr_info.get("source_label", "generated")
             heal_label = "self-healed" if healed else "generated"
 
+            import sys as _sys
+            print(f"[test_healer] {ticket_id}: github_prs keys={list(github_prs.keys())} branch_name={branch_name!r}", file=_sys.stderr, flush=True)
+
+            if not branch_name:
+                print(f"[test_healer] {ticket_id}: WARNING — branch_name is empty, skipping GitHub push.", file=_sys.stderr, flush=True)
+                if channel:
+                    notify_progress(channel, f":warning: `{ticket_id}` — no branch name found, PR skipped. Check automator output.", thread_ts)
+
             if branch_name:
                 try:
-                    print(f"[test_healer] {ticket_id}: creating branch {branch_name} ...")
+                    print(f"[test_healer] {ticket_id}: creating branch {branch_name} ...", file=_sys.stderr, flush=True)
                     create_branch(branch_name, from_branch=GITHUB_DEFAULT_BRANCH)
 
-                    print(f"[test_healer] {ticket_id}: committing {len(current_files)} file(s) ...")
+                    print(f"[test_healer] {ticket_id}: committing {len(current_files)} file(s): {list(current_files.keys())}", file=_sys.stderr, flush=True)
                     commit_files(
                         branch_name=branch_name,
                         files=current_files,
@@ -642,13 +645,13 @@ def build_test_healer_node():
                         body=pr_body,
                     )
                     github_prs[ticket_id] = {**pr_info, "pr_url": pr["url"], "pr_number": pr["number"]}
-                    print(f"[test_healer] {ticket_id}: PR #{pr['number']} opened: {pr['url']}")
+                    print(f"[test_healer] {ticket_id}: PR #{pr['number']} opened: {pr['url']}", file=_sys.stderr, flush=True)
                     if channel:
                         notify_progress(channel,
                             f":github: PR #{pr['number']} created for `{ticket_id}` ({heal_label}): {pr['url']}\nBranch: `{branch_name}`",
                             thread_ts)
                 except Exception as exc:
-                    print(f"[test_healer] {ticket_id}: GitHub push failed: {exc}")
+                    print(f"[test_healer] {ticket_id}: GitHub push failed: {exc}", file=_sys.stderr, flush=True)
                     if channel:
                         notify_progress(channel, f":warning: `{ticket_id}` — GitHub push failed: {exc}", thread_ts)
 

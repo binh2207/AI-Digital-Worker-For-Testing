@@ -3,11 +3,11 @@ Node 1 — Test Designer Agent
 Calls Claude Code CLI to extract acceptance criteria from the JIRA ticket
 and generate exactly one test case per criterion — no extras.
 """
-import subprocess
 from state import WorkflowState
 from tools.jira_client import add_comment
 from tools.slack_client import notify_progress
-from config import PLAYWRIGHT_BASE_URL, PROJECT_DIR, CLAUDE_CMD
+from tools.claude_client import call_claude
+from config import PLAYWRIGHT_BASE_URL
 
 
 def build_test_designer_node():
@@ -63,15 +63,9 @@ def build_test_designer_node():
 """
 
             print(f"[test_designer] Generating test cases for {ticket_id} ...")
-            result = subprocess.run(
-                [CLAUDE_CMD, "--print", "--output-format", "text"],
-                input=prompt, capture_output=True, text=True,
-                encoding="utf-8", timeout=120, cwd=PROJECT_DIR,
-            )
-
-            markdown = result.stdout.strip()
+            markdown = call_claude(prompt)
             if not markdown:
-                print(f"[test_designer] {ticket_id}: no output (stderr: {result.stderr[:200]})")
+                print(f"[test_designer] {ticket_id}: no output from Claude API.")
                 continue
 
             test_cases[ticket_id] = markdown

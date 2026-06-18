@@ -1,40 +1,33 @@
-import { Page, Locator, expect } from '@playwright/test';
+import { Page, Locator } from '@playwright/test';
 import { BasePage } from './BasePage';
 
 export class SelectVariantsAndAddProductsToCartPage extends BasePage {
-  readonly variantSelect: Locator;
   readonly addToCartButton: Locator;
   readonly cartLink: Locator;
-  readonly cartLinkInBanner: Locator;
   readonly greyJacketLink: Locator;
-  readonly cartSubtotal: Locator;
-  readonly continueShoppingLink: Locator;
   readonly emptyCartMessage: Locator;
+  readonly continueShoppingLink: Locator;
+  // cart item row — fallbacks: tr.cart__row, tr:has(td:has-text("Grey jacket")), .cart__row
+  // scope_locator: table.cart__table, form[action="/cart"]
+  readonly cartItemRow: Locator;
 
   constructor(page: Page) {
     super(page);
-    this.variantSelect = page.locator('select#product-select-option-0');
-    // fallbacks: ['.btn.add-to-cart', "input[type='submit'][value='Add to Cart']"]
-    this.addToCartButton = page.locator('input#add');
-    this.cartLink = page.getByRole('link', { name: /My Cart/ });
-    this.cartLinkInBanner = page.getByRole('banner').getByRole('link', { name: /My Cart/ });
-    this.greyJacketLink = page.getByRole('link', { name: /grey.?jacket/i });
-    this.cartSubtotal = page.locator('.cart-subtotal, .total');
-    this.continueShoppingLink = page.getByRole('link', { name: /Continue Shopping/ });
-    this.emptyCartMessage = page.getByText('It appears that your cart is currently empty!', { exact: true });
+    this.addToCartButton = page.getByRole('button', { name: 'Add to Cart' });
+    this.cartLink = page.locator('a[href="/cart"]');
+    this.greyJacketLink = page.locator('a[href*="/products/grey-jacket"]');
+    // locator_alternatives[0]: tr.cart__row — locator_alternatives[1]: tr:has(td:has-text("Grey jacket"))
+    this.cartItemRow = page.locator('tr').filter({ hasText: /grey jacket/i }).first();
+    this.emptyCartMessage = page.getByText('It appears that your cart is currently empty!');
+    this.continueShoppingLink = page.getByRole('link', { name: 'Continue Shopping' });
   }
 
-  async goto(): Promise<void> {
+  async gotoProductPage(): Promise<void> {
     await this.page.goto('https://sauce-demo.myshopify.com/collections/frontpage/products/grey-jacket');
   }
 
-  async gotoCart(): Promise<void> {
-    await this.page.goto('https://sauce-demo.myshopify.com/collections/frontpage/products/grey-jacket');
-    await expect(this.addToCartButton).toBeAttached({ timeout: 10000 });
-    await this.addToCartButton.click();
-    await this.page.waitForLoadState('networkidle');
+  async gotoCartPage(): Promise<void> {
     await this.page.goto('https://sauce-demo.myshopify.com/cart');
-    await this.page.waitForLoadState('domcontentloaded');
   }
 
   async gotoEmptyCart(): Promise<void> {

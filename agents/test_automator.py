@@ -11,7 +11,9 @@ from datetime import datetime
 from state import WorkflowState
 from pathlib import Path
 from tools.slack_client import notify_progress
-from config import PROJECT_DIR, CLAUDE_CMD
+from tools.github_client import create_branch, commit_files, create_pull_request
+from tools.claude_client import call_claude
+from config import PROJECT_DIR, GITHUB_DEFAULT_BRANCH
 
 PLAYWRIGHT_DIR = str(Path(PROJECT_DIR) / "playwright-framework")
 
@@ -393,19 +395,11 @@ Spec rules:
 """
 
             print(f"[test_automator] Calling Claude to generate scripts for {ticket_id} ...")
-            result_claude = subprocess.run(
-                [CLAUDE_CMD, "--print", "--output-format", "text"],
-                input=prompt,
-                capture_output=True, text=True, encoding="utf-8",
-                timeout=300, cwd=PROJECT_DIR,
-            )
-
-            output = result_claude.stdout.strip()
+            output = call_claude(prompt, max_tokens=8096)
             if not output:
-                stderr_hint = result_claude.stderr.strip()[:300] if result_claude.stderr else ""
-                print(f"[test_automator] {ticket_id}: no output from Claude (exit={result_claude.returncode}). stderr: {stderr_hint}")
+                print(f"[test_automator] {ticket_id}: no output from Claude API.")
                 if channel:
-                    notify_progress(channel, f":warning: `{ticket_id}` — Claude returned no output (exit {result_claude.returncode}). Check ANTHROPIC_API_KEY.", thread_ts)
+                    notify_progress(channel, f":warning: `{ticket_id}` — Claude returned no output. Check ANTHROPIC_API_KEY.", thread_ts)
                 continue
 
             files = _parse_files(output)
@@ -431,37 +425,74 @@ Spec rules:
                 if channel:
                     err_summary = "\n".join(f"• {e}" for e in val_errors)
                     notify_progress(channel,
-                        f":warning: `{ticket_id}` — {len(val_errors)} validation issue(s) detected, healer will fix:\n{err_summary}",
+                        f":warning: `{ticket_id}` — {len(val_errors)} validation issue(s) detected (PR still created for manual review):\n{err_summary}",
                         thread_ts)
             else:
                 print(f"[test_automator] {ticket_id}: ✓ structural validation passed (TC coverage, locators, class import).")
 
-            # Check 4: TypeScript compile check
-            tsc_ok, tsc_out = _run_tsc_check()
-            if not tsc_ok:
-                print(f"[test_automator] {ticket_id}: ✗ tsc check FAILED:\n{tsc_out[:500]}")
-                if channel:
-                    notify_progress(channel,
-                        f":x: `{ticket_id}` — TypeScript compile error detected before healing:\n```{tsc_out[:300]}```",
-                        thread_ts)
-            else:
-                print(f"[test_automator] {ticket_id}: ✓ tsc check PASSED.")
+            # Check 4: TypeScript compile check (non-blocking — failure noted but PR still created)
+            try:
+                tsc_ok, tsc_out = _run_tsc_check()
+                if not tsc_ok:
+                    print(f"[test_automator] {ticket_id}: ✗ tsc check FAILED:\n{tsc_out[:500]}")
+                    if channel:
+                        notify_progress(channel,
+                            f":x: `{ticket_id}` — TypeScript compile error detected:\n```{tsc_out[:300]}```",
+                            thread_ts)
+                else:
+                    print(f"[test_automator] {ticket_id}: ✓ tsc check PASSED.")
+            except Exception as tsc_exc:
+                tsc_ok = False
+                tsc_out = str(tsc_exc)
+                print(f"[test_automator] {ticket_id}: tsc check raised exception: {tsc_exc}")
 
             # Store validation result in source_label for PR body context
             val_status = f"✓ clean" if (not val_errors and tsc_ok) else f"⚠ {len(val_errors)} structural + {'tsc fail' if not tsc_ok else 'tsc ok'}"
 
-            # Store scripts in state — GitHub push happens after self-healing
+            # Push scripts to GitHub and open PR
             branch_name = f"qa-bot/{ticket_id.lower()}-{timestamp}"
             automation_scripts[ticket_id] = list(files.keys())
             automation_file_contents[ticket_id] = files
-            github_prs[ticket_id] = {
-                "branch": branch_name,
-                "summary": ticket["summary"],
-                "source_label": f"{source_label} | pre-heal validation: {val_status}",
-            }
-            print(f"[test_automator] {ticket_id}: {len(files)} file(s) saved locally and staged for self-healing.")
-            if channel:
-                notify_progress(channel, f":hourglass: `{ticket_id}` — scripts generated and saved locally, handing off to self-healer before pushing PR.", thread_ts)
+
+            try:
+                create_branch(branch_name, from_branch=GITHUB_DEFAULT_BRANCH)
+                commit_files(
+                    branch_name=branch_name,
+                    files=files,
+                    message=f"feat(qa-bot): generated automation scripts for {ticket_id}",
+                )
+                pr_body = (
+                    f"## Auto-generated by Quality-Engineer-Bot\n\n"
+                    f"**Ticket:** {ticket_id} — {ticket['summary']}\n"
+                    f"**Source:** {source_label}\n"
+                    f"**Validation:** {val_status}\n\n"
+                    f"### Files\n"
+                    + "\n".join(f"- `{p}`" for p in files)
+                    + "\n\n> Do **not** merge manually — this PR is managed by QA Bot."
+                )
+                pr = create_pull_request(
+                    branch_name=branch_name,
+                    base_branch=GITHUB_DEFAULT_BRANCH,
+                    title=f"[QA Bot] {ticket_id} — {ticket['summary']}",
+                    body=pr_body,
+                )
+                github_prs[ticket_id] = {
+                    "branch": branch_name,
+                    "summary": ticket["summary"],
+                    "source_label": source_label,
+                    "pr_url": pr["url"],
+                    "pr_number": pr["number"],
+                }
+                print(f"[test_automator] {ticket_id}: PR #{pr['number']} opened: {pr['url']}")
+                if channel:
+                    notify_progress(channel,
+                        f":github: PR #{pr['number']} created for `{ticket_id}`: {pr['url']}\nBranch: `{branch_name}`",
+                        thread_ts)
+            except Exception as exc:
+                print(f"[test_automator] {ticket_id}: GitHub push failed: {exc}")
+                github_prs[ticket_id] = {"branch": branch_name, "summary": ticket["summary"]}
+                if channel:
+                    notify_progress(channel, f":warning: `{ticket_id}` — GitHub push failed: {exc}", thread_ts)
 
         return {**state, "automation_scripts": automation_scripts, "automation_file_contents": automation_file_contents, "github_prs": github_prs}
 

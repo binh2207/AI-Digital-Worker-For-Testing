@@ -4,11 +4,10 @@ Calls Claude Code CLI to summarise live test execution results,
 updates JIRA tickets, and posts a report to Slack.
 """
 import re
-import subprocess
 from state import WorkflowState
 from tools.jira_client import add_comment, transition_ticket
 from tools.slack_client import post_message, lookup_user_id
-from config import PROJECT_DIR, CLAUDE_CMD
+from tools.claude_client import call_claude
 
 
 def _derive_status(raw: str, exit_code: int) -> tuple[str, int, int]:
@@ -62,11 +61,7 @@ Write a concise Slack-ready summary (plain text, under 15 lines):
 No markdown headers, no code blocks."""
 
             print(f"[test_reporter] Generating summary for {ticket_id} ...")
-            result_claude = subprocess.run(
-                [CLAUDE_CMD, "--print", "--output-format", "text"],
-                input=prompt, capture_output=True, text=True, encoding="utf-8", timeout=60, cwd=PROJECT_DIR,
-            )
-            summary_text = result_claude.stdout.strip() or raw[:500]
+            summary_text = call_claude(prompt, max_tokens=1024) or raw[:500]
             test_summary[ticket_id] = summary_text
 
             jira_comment = (
