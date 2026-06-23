@@ -2,117 +2,86 @@ import { Page, Locator } from '@playwright/test';
 import BasePage from './BasePage';
 
 export class BrowseProductCatalogAndViewProductDetailsPage extends BasePage {
-  // Homepage — Grey jacket product card (Shopify duplicate-variant naming: "Grey jacket Grey jacket £55.00")
-  readonly greyJacketCard: Locator;
-  readonly greyJacketTitle: Locator;
-  readonly greyJacketPrice: Locator;
+  // Grey jacket product card — appears on homepage featured section and catalog page
+  readonly greyJacketCardLink: Locator;
+  // Product name heading scoped inside the Grey jacket card link
+  readonly greyJacketNameHeading: Locator;
+  // Price heading scoped inside the Grey jacket card link
+  // fallback: this.greyJacketCardLink.getByText('£55.00', { exact: true })
+  readonly greyJacketPriceHeading: Locator;
 
-  // Catalog page — breadcrumb and product grid
-  readonly catalogNavLink: Locator;
-  readonly breadcrumbNav: Locator;
-  readonly breadcrumbHomeLink: Locator;
-  readonly breadcrumbProductsLink: Locator;
-  readonly blackHeelsCard: Locator;
+  // Breadcrumb navigation rendered on collection/catalog pages
+  // fallback: page.locator('[aria-label*="breadcrumb"]'), page.locator('nav.breadcrumb')
+  readonly breadcrumbContainer: Locator;
 
-  // Product detail page
-  readonly productTitle: Locator;
-  readonly productPrice: Locator;
-  readonly sizeCombobox: Locator;
-  readonly colorCombobox: Locator;
-  readonly productDescription: Locator;
+  // White sandals — sold-out product card on catalog page
+  readonly whiteSandalsCardLink: Locator;
+  readonly whiteSandalsSoldOutBadge: Locator;
 
-  // Main menu navigation (scoped to #main-menu to avoid ambiguity with footer/repeated links)
-  readonly blogNavLink: Locator;
-  readonly aboutUsNavLink: Locator;
-  readonly homeNavLink: Locator;
+  // Brown Shades — sold-out product card on catalog page
+  readonly brownShadesCardLink: Locator;
+  readonly brownShadesSoldOutBadge: Locator;
+
+  // Main menu navigation — all scoped to #main-menu as recorded
+  // fallbacks: a[href='/'], a[href='/collections/all'], a[href='/blogs/news'], a[href='/pages/about-us']
+  readonly mainMenuHomeLink: Locator;
+  readonly mainMenuCatalogLink: Locator;
+  readonly mainMenuBlogLink: Locator;
+  readonly mainMenuAboutUsLink: Locator;
 
   constructor(page: Page) {
     super(page);
 
-    // Homepage product card — regex guards against "Grey jacket - Grey jacket" Shopify duplicate rendering
-    this.greyJacketCard = page.getByRole('link', { name: /Grey jacket/ });
-    this.greyJacketTitle = this.greyJacketCard.getByRole('heading', { name: 'Grey jacket' });
-    // fallback: this.greyJacketCard.locator('h3:has-text("Grey jacket")')
-    this.greyJacketPrice = this.greyJacketCard.getByRole('heading', { name: '£55.00' });
-    // fallback: this.greyJacketCard.locator('[class*="price"]:has-text("£55.00")')
+    this.greyJacketCardLink = page.getByRole('link', { name: /Grey jacket/ });
+    this.greyJacketNameHeading = this.greyJacketCardLink.getByRole('heading', { name: 'Grey jacket' });
+    this.greyJacketPriceHeading = this.greyJacketCardLink.getByRole('heading', { name: '£55.00' });
 
-    // Catalog nav link — unique in the main menu
-    this.catalogNavLink = page.getByRole('link', { name: 'Catalog' });
-    // fallback: page.locator("a[href='/collections/all']")
+    this.breadcrumbContainer = page.locator('.breadcrumbs');
 
-    // Breadcrumb nav — the em dash (—) uniquely distinguishes it from the main navigation
-    this.breadcrumbNav = page.getByRole('navigation').filter({ hasText: '—' });
-    this.breadcrumbHomeLink = this.breadcrumbNav.getByRole('link', { name: 'Home' });
-    this.breadcrumbProductsLink = this.breadcrumbNav.getByRole('link', { name: 'Products' });
+    this.whiteSandalsCardLink = page.getByRole('link', { name: /White sandals/ });
+    this.whiteSandalsSoldOutBadge = this.whiteSandalsCardLink.getByText('Sold Out');
 
-    // Black heels product card — regex handles any Shopify variant suffix appended to the title
-    this.blackHeelsCard = page.getByRole('link', { name: /Black heels/ });
-    // fallback: page.locator("a[href='/collections/all/products/flower-print-jeans']")
+    this.brownShadesCardLink = page.getByRole('link', { name: /Brown Shades/ });
+    this.brownShadesSoldOutBadge = this.brownShadesCardLink.getByText('Sold Out');
 
-    // Product detail page — level constraints prevent matching secondary headings
-    this.productTitle = page.getByRole('heading', { level: 1 });
-    this.productPrice = page.getByRole('heading', { level: 2 });
-    this.sizeCombobox = page.getByRole('combobox', { name: 'Size' });
-    this.colorCombobox = page.getByRole('combobox', { name: 'Color' });
-    // Description is a non-interactive generic block; exact match prevents substring collision
-    this.productDescription = page.getByText(
-      'This area is populated by the product description.',
-      { exact: true },
-    );
-
-    // Main menu links — scoped to #main-menu because "About Us" and "Home" can appear in footer (count > 1)
-    this.blogNavLink = page.getByRole('link', { name: 'Blog' });
-    // fallback: page.locator("a[href='/blogs/news']")
-    this.aboutUsNavLink = page.locator('#main-menu').getByRole('link', { name: 'About Us' });
-    // fallback: page.locator("a[href='/pages/about-us']")
-    this.homeNavLink = page.locator('#main-menu').getByRole('link', { name: 'Home' });
-    // fallback: page.locator('#main-menu').locator("a[href='/']")
+    this.mainMenuHomeLink = page.locator('#main-menu').getByRole('link', { name: 'Home' });
+    this.mainMenuCatalogLink = page.locator('#main-menu').getByRole('link', { name: 'Catalog' });
+    this.mainMenuBlogLink = page.locator('#main-menu').getByRole('link', { name: 'Blog' });
+    this.mainMenuAboutUsLink = page.locator('#main-menu').getByRole('link', { name: 'About Us' });
   }
 
-  async gotoHomepage(): Promise<void> {
-    await this.page.goto('https://sauce-demo.myshopify.com/');
+  async goto(path = '/'): Promise<void> {
+    await this.page.goto(`https://sauce-demo.myshopify.com${path}`);
   }
 
-  async gotoCatalog(): Promise<void> {
-    await this.page.goto('https://sauce-demo.myshopify.com/collections/all');
-  }
-
-  async clickCatalogLink(): Promise<void> {
-    await Promise.all([
-      this.page.waitForURL('https://sauce-demo.myshopify.com/collections/all'),
-      this.catalogNavLink.click(),
-    ]);
-    await this.page.waitForLoadState('load');
-  }
-
-  async clickBlackHeels(): Promise<void> {
-    await Promise.all([
-      this.page.waitForURL('https://sauce-demo.myshopify.com/products/flower-print-jeans'),
-      this.blackHeelsCard.click(),
-    ]);
-    await this.page.waitForLoadState('load');
-  }
-
-  async clickBlogLink(): Promise<void> {
-    await Promise.all([
-      this.page.waitForURL('https://sauce-demo.myshopify.com/blogs/news'),
-      this.blogNavLink.click(),
-    ]);
-    await this.page.waitForLoadState('load');
-  }
-
-  async clickAboutUsLink(): Promise<void> {
-    await Promise.all([
-      this.page.waitForURL('https://sauce-demo.myshopify.com/pages/about-us'),
-      this.aboutUsNavLink.click(),
-    ]);
-    await this.page.waitForLoadState('load');
-  }
-
-  async clickHomeLink(): Promise<void> {
+  async clickMainMenuHome(): Promise<void> {
     await Promise.all([
       this.page.waitForURL('https://sauce-demo.myshopify.com/'),
-      this.homeNavLink.click(),
+      this.mainMenuHomeLink.click(),
+    ]);
+    await this.page.waitForLoadState('load');
+  }
+
+  async clickMainMenuCatalog(): Promise<void> {
+    await Promise.all([
+      this.page.waitForURL('https://sauce-demo.myshopify.com/collections/all'),
+      this.mainMenuCatalogLink.click(),
+    ]);
+    await this.page.waitForLoadState('load');
+  }
+
+  async clickMainMenuBlog(): Promise<void> {
+    await Promise.all([
+      this.page.waitForURL('https://sauce-demo.myshopify.com/blogs/news'),
+      this.mainMenuBlogLink.click(),
+    ]);
+    await this.page.waitForLoadState('load');
+  }
+
+  async clickMainMenuAboutUs(): Promise<void> {
+    await Promise.all([
+      this.page.waitForURL('https://sauce-demo.myshopify.com/pages/about-us'),
+      this.mainMenuAboutUsLink.click(),
     ]);
     await this.page.waitForLoadState('load');
   }
